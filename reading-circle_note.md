@@ -119,9 +119,9 @@ docker stats
 ab -c 1 -t 30 http://localhost/
 ```
 
-上記の確認で、`mysqld`がCPUを占有していることがわかったので、スロークエリを出力して処理の内訳を核にしてみます。
+上記の確認で、`mysqld`がCPUを占有していることがわかったので、スロークエリを出力して処理の内訳を確認してみます。
 
-`my.cnf`に下記を記述することでスロークエリログを出力します。
+書籍では、`my.cnf`に下記を記述することでスロークエリログを出力します。
 
 ```
 [mysqld]
@@ -130,7 +130,9 @@ slow_query_log_file = /var/log/mysql/mysql-slow.log
 long_query_time = 0
 ```
 
-Dockerの場合は、`webapp/etc/mysql/conf.d/my.cnf`に記述し、以下のように`webapp/docker-compose.yml`でログの出力先をマウントした上で、MySQLを再起動します。（一度 `docker compose down`してから`docker compose up`がわかりやすい）
+今回利用しているDockerの`mysql:8`イメージでは、`my.cnf`による設定に難があるので、起動パラメータにて指定します。
+
+以下のように`webapp/docker-compose.yml`でログの出力先をマウントした上で、MySQLを再起動します。（一度 `docker compose down`してから`docker compose up`がわかりやすい）
 
 `webapp/docker-compose.yml`
 
@@ -140,9 +142,14 @@ Dockerの場合は、`webapp/etc/mysql/conf.d/my.cnf`に記述し、以下のよ
       volumes:
         - ...
 +       - ./logs/mysql:/var/log/mysql
++     command: ["mysqld", "--slow-query-log", "--slow-query-log-file=/var/log/mysql/mysql-slow.log", "--long-query-time=0"]
 ```
 
-MySQLの再起動ができたら、
+MySQLの再起動ができたら、もう一度ように負荷をかけます。
+
+```bash
+ab -c 1 -t 30 http://localhost/
+```
 
 スロークエリの分析には`mysqldumpslow`コマンドが便利です。コマンドが見つからない場合は、`mysql-server`をインストールしてください。
 
@@ -150,14 +157,21 @@ MySQLの再起動ができたら、
 mysqldumpslow webapp/logs/mysql/mysql-slow.log
 ```
 
-スロークエリログのローテーションは、下記にようにmysqlのDockerインスタンスにログインしてからファイルをリネームします。
+スロークエリログのローテーションは、下記にようにmysqlのDockerインスタンスにログインしてからファイルをリネームします。ファイルを掴んだままなので、MySQLを再起動します。
 
 ```bash
 docker exec -it webapp-mysql-1 /bin/bash
-mv /var/log/mysql/mysql-slow.log /var/log/mysql/mysql-slow.log.old
+mv -f /var/log/mysql/mysql-slow.log /var/log/mysql/mysql-slow.log.old
 ```
 
-MySQLでクエリを実行する場合は、以下を実行します。
+多く時間を消費しているクエリのうち、今回対処するのはこのクエリです。`post_id`による絞り込みで時間がかかっているようです。
+
+```
+Count: 330  Time=0.06s (20s)  Lock=0.00s (0s)  Rows=3.0 (990), root[root]@[172.21.0.4]
+  SELECT * FROM `comments` WHERE `post_id` = N ORDER BY `created_at` DESC LIMIT N
+```
+
+MySQLで`EXPLAIN`コマンドで確認したり、対処を行います。MySQLでクエリを実行するため、以下を実行します。
 
 ```bash
 docker exec -it webapp-mysql-1 mysql -u root -p
@@ -165,6 +179,23 @@ docker exec -it webapp-mysql-1 mysql -u root -p
 
 ```mysql
 use isuconp;
+
+# テーブルの構造を確認したり、`EXPLAIN`で動作を確認する
 SHOW CREATE TABLE comments;
 EXPLAIN SELECT * FROM `comments` WHERE `post_id` = 9995 ORDER BY `created_at` DESC LIMIT 3;
+
+# `comments`テーブルの`post_id`にインデックスを設定する
+ALTER TABLE comments ADD INDEX post_id_idx(post_id);
+
+# もう一度`EXPLAIN`で動作を確認する
+EXPLAIN SELECT * FROM `comments` WHERE `post_id` = 9995 ORDER BY `created_at` DESC LIMIT 3;
+```
+
+columnの個数が劇的に減ったことがわかります。
+
+この状態で再度負荷をかけ、スロークエリログを`mysqldumpslow`で解析してみましょう。`Time`の値も低くなっていることがわかります。
+
+```
+Count: 3652  Time=0.00s (1s)  Lock=0.00s (0s)  Rows=3.0 (10956), root[root]@[172.22.0.4]
+  SELECT * FROM `comments` WHERE `post_id` = N ORDER BY `created_at` DESC LIMIT N
 ```

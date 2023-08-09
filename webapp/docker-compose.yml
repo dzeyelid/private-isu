@@ -40,9 +40,9 @@ services:
       - "MYSQL_ROOT_PASSWORD=root"
     volumes:
       - mysql:/var/lib/mysql
-      - ./etc/my.cnf:/etc/my.cnf
       - ./sql:/docker-entrypoint-initdb.d
       - ./logs/mysql:/var/log/mysql
+    command: ["mysqld", "--slow-query-log", "--slow-query-log-file=/var/log/mysql/mysql-slow.log", "--long-query-time=0"]
     ports:
       - "3306:3306"
     deploy:
