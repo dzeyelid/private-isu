@@ -187,6 +187,9 @@ EXPLAIN SELECT * FROM `comments` WHERE `post_id` = 9995 ORDER BY `created_at` DE
 # `comments`テーブルの`post_id`にインデックスを設定する
 ALTER TABLE comments ADD INDEX post_id_idx(post_id);
 
+# 戻すときはこれ
+ALTER TABLE comments DROP INDEX post_id_idx;
+
 # もう一度`EXPLAIN`で動作を確認する
 EXPLAIN SELECT * FROM `comments` WHERE `post_id` = 9995 ORDER BY `created_at` DESC LIMIT 3;
 ```
